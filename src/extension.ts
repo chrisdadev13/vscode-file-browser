@@ -41,6 +41,10 @@ class FileBrowser {
     inActions: boolean = false;
     keepAlive: boolean = false;
     autoCompletion?: AutoCompletion;
+    inSearchMode: boolean = false;
+    inVisualMode: boolean = false;
+    visualSelectionStart: number = -1;
+    selectedItems: FileItem[] = [];
 
     actionsButton: QuickInputButton = {
         iconPath: new ThemeIcon("ellipsis"),
@@ -71,8 +75,10 @@ class FileBrowser {
         this.current.onDidChangeValue(this.onDidChangeValue.bind(this));
         this.current.onDidTriggerButton(this.onDidTriggerButton.bind(this));
         this.update().then(() => {
-            this.current.placeholder = "Type a file name here to search or open a new file";
+            this.current.placeholder = "NORMAL mode (/ or i for INSERT, v for VISUAL, j/k to navigate)";
             this.current.busy = false;
+            this.setSearchMode(false);
+            this.setVisualMode(false);
         });
     }
 
@@ -155,6 +161,13 @@ class FileBrowser {
             this.autoCompletion = undefined;
         }
 
+        // We're in insert mode (vim terminology) when inSearchMode is true
+        if (!this.inSearchMode && value !== "") {
+            // Don't automatically enter search mode when typing
+            // This should only happen when explicitly toggled
+            return;
+        }
+
         const existingItem = this.items.find((item) => item.name === value);
         if (value === "") {
             this.current.items = this.items;
@@ -174,15 +187,36 @@ class FileBrowser {
                     }
                 },
                 () => {
-                    const newItem = {
-                        label: `$(new-file) ${value}`,
-                        name: value,
-                        description: "Open as new file",
-                        alwaysShow: true,
-                        action: Action.NewFile,
-                    };
-                    this.current.items = [newItem, ...this.items];
-                    this.current.activeItems = [newItem];
+                    // Filter items based on search input
+                    if (this.inSearchMode) {
+                        const filtered = this.items.filter((item) =>
+                            item.name.toLowerCase().includes(value.toLowerCase())
+                        );
+                        this.current.items = filtered;
+                        if (filtered.length > 0) {
+                            this.current.activeItems = [filtered[0]];
+                        } else {
+                            const newItem = {
+                                label: `$(new-file) ${value}`,
+                                name: value,
+                                description: "Open as new file",
+                                alwaysShow: true,
+                                action: Action.NewFile,
+                            };
+                            this.current.items = [newItem];
+                            this.current.activeItems = [newItem];
+                        }
+                    } else {
+                        const newItem = {
+                            label: `$(new-file) ${value}`,
+                            name: value,
+                            description: "Open as new file",
+                            alwaysShow: true,
+                            action: Action.NewFile,
+                        };
+                        this.current.items = [newItem, ...this.items];
+                        this.current.activeItems = [newItem];
+                    }
                 }
             );
         }
@@ -290,6 +324,21 @@ class FileBrowser {
 
     onDidAccept() {
         this.autoCompletion = undefined;
+        
+        // If in search mode, select the item and exit search mode
+        if (this.inSearchMode) {
+            // Only exit search mode if we actually select something
+            if (this.current.activeItems.length > 0) {
+                this.setSearchMode(false);
+            }
+        }
+        
+        // If in visual mode, perform action on all selected items
+        if (this.inVisualMode && this.selectedItems.length > 0) {
+            // For now, we'll just exit visual mode and select the current item
+            this.setVisualMode(false);
+        }
+        
         this.activeItem().ifSome((item) => {
             if (item.action !== undefined) {
                 this.runAction(item);
@@ -423,10 +472,250 @@ class FileBrowser {
                 throw new Error(`Unhandled action ${item.action}`);
         }
     }
+
+    setSearchMode(isSearchMode: boolean) {
+        this.inSearchMode = isSearchMode;
+        vscode.commands.executeCommand("setContext", "file-browser.inSearchMode", isSearchMode);
+        
+        if (isSearchMode) {
+            // Exit visual mode if entering search/insert mode
+            this.setVisualMode(false);
+        }
+        
+        if (!isSearchMode) {
+            // Clear the search and reset the items
+            this.current.value = "";
+            this.current.items = this.items;
+            this.current.placeholder = "NORMAL mode (/ or i for INSERT, v for VISUAL, j/k to navigate)";
+        } else {
+            this.current.placeholder = "INSERT mode (ESC to exit)";
+        }
+    }
+
+    toggleSearchMode() {
+        this.setSearchMode(!this.inSearchMode);
+    }
+
+    exitSearchMode() {
+        this.setSearchMode(false);
+    }
+
+    setVisualMode(isVisualMode: boolean) {
+        this.inVisualMode = isVisualMode;
+        vscode.commands.executeCommand("setContext", "file-browser.inVisualMode", isVisualMode);
+        
+        if (isVisualMode) {
+            // Exit search mode if entering visual mode
+            this.inSearchMode = false;
+            vscode.commands.executeCommand("setContext", "file-browser.inSearchMode", false);
+            
+            // Set the starting point for visual selection
+            if (this.current.activeItems.length > 0) {
+                const activeItem = this.current.activeItems[0];
+                this.visualSelectionStart = this.current.items.indexOf(activeItem);
+                this.selectedItems = [activeItem];
+                this.current.placeholder = "VISUAL mode (ESC to exit, j/k to select, r to rename, d to delete)";
+            } else {
+                // Can't enter visual mode without an active item
+                this.inVisualMode = false;
+                return;
+            }
+        } else {
+            // Clear visual selection
+            this.visualSelectionStart = -1;
+            this.selectedItems = [];
+            if (!this.inSearchMode) {
+                this.current.placeholder = "NORMAL mode (/ or i for INSERT, v for VISUAL, j/k to navigate)";
+            }
+        }
+        
+        // Update the UI to show selection
+        this.updateVisualSelection();
+    }
+
+    toggleVisualMode() {
+        this.setVisualMode(!this.inVisualMode);
+    }
+
+    exitVisualMode() {
+        this.setVisualMode(false);
+    }
+
+    updateVisualSelection() {
+        if (!this.inVisualMode || this.visualSelectionStart < 0) {
+            return;
+        }
+        
+        const items = this.current.items;
+        if (items.length === 0) {
+            return;
+        }
+        
+        let currentIndex = -1;
+        if (this.current.activeItems.length > 0) {
+            currentIndex = items.indexOf(this.current.activeItems[0]);
+        }
+        
+        if (currentIndex < 0) {
+            return;
+        }
+        
+        // Calculate the range of items to select
+        const start = Math.min(this.visualSelectionStart, currentIndex);
+        const end = Math.max(this.visualSelectionStart, currentIndex);
+        
+        // Select all items in the range
+        this.selectedItems = items.slice(start, end + 1);
+        
+        // Highlight the selected items
+        // Unfortunately QuickPick doesn't support multiple selection highlighting natively
+        // So we're updating the UI to indicate our selection
+        for (const item of items) {
+            if (this.selectedItems.includes(item)) {
+                item.label = item.label.startsWith('$(check) ') ? 
+                    item.label : 
+                    '$(check) ' + item.label.replace(/^\$\(check\) /, '');
+            } else {
+                item.label = item.label.replace(/^\$\(check\) /, '');
+            }
+        }
+        
+        // Refresh the display
+        this.current.items = [...items];
+    }
+
+    moveDown() {
+        if (this.inActions || this.inSearchMode) {
+            return;
+        }
+
+        const items = this.current.items;
+        if (items.length === 0) {
+            return;
+        }
+
+        let index = -1;
+        if (this.current.activeItems.length > 0) {
+            index = items.indexOf(this.current.activeItems[0]);
+        }
+
+        index = (index + 1) % items.length;
+        this.current.activeItems = [items[index]];
+        
+        // Update visual selection if in visual mode
+        if (this.inVisualMode) {
+            this.updateVisualSelection();
+        }
+    }
+
+    moveUp() {
+        if (this.inActions || this.inSearchMode) {
+            return;
+        }
+
+        const items = this.current.items;
+        if (items.length === 0) {
+            return;
+        }
+
+        let index = 0;
+        if (this.current.activeItems.length > 0) {
+            index = items.indexOf(this.current.activeItems[0]);
+        }
+
+        index = (index - 1 + items.length) % items.length;
+        this.current.activeItems = [items[index]];
+        
+        // Update visual selection if in visual mode
+        if (this.inVisualMode) {
+            this.updateVisualSelection();
+        }
+    }
+
+    // Add new methods for renaming and deleting in visual mode
+    async renameInVisualMode() {
+        if (!this.inVisualMode || this.selectedItems.length !== 1) {
+            // Only allow renaming one item at a time
+            return;
+        }
+
+        const item = this.selectedItems[0];
+        if (!item.fileType) {
+            // Can't rename special items like "New file"
+            return;
+        }
+
+        // Exit visual mode
+        this.setVisualMode(false);
+
+        // Push the item name to the path
+        this.path.push(item.name);
+        // Then rename it
+        this.keepAlive = true;
+        this.hide();
+        await this.rename();
+        this.show();
+        this.keepAlive = false;
+        this.inActions = false;
+        this.update();
+    }
+
+    async deleteInVisualMode() {
+        if (!this.inVisualMode || this.selectedItems.length === 0) {
+            return;
+        }
+
+        // Exit visual mode but keep the selected items
+        const itemsToDelete = [...this.selectedItems];
+        this.setVisualMode(false);
+
+        // Only process items with fileType (actual files or directories)
+        const validItems = itemsToDelete.filter(item => item.fileType !== undefined);
+        
+        if (validItems.length === 0) {
+            return;
+        }
+
+        this.keepAlive = true;
+        this.hide();
+
+        // Create confirm message
+        const itemNames = validItems.map(item => item.name).join('", "');
+        const isMultiple = validItems.length > 1;
+        const itemType = isMultiple ? "items" : 
+            ((validItems[0].fileType! & FileType.Directory) === FileType.Directory ? "folder" : "file");
+        
+        const goAhead = `$(trash) Delete ${isMultiple ? 'these' : 'the'} ${itemType} "${itemNames}"`;
+        const result = await vscode.window.showQuickPick(["$(close) Cancel", goAhead], {});
+        
+        if (result === goAhead) {
+            // Delete each item one by one
+            for (const item of validItems) {
+                const itemPath = this.path.append(item.name);
+                const isDir = (item.fileType! & FileType.Directory) === FileType.Directory;
+                
+                const delOp = await Result.await(
+                    vscode.workspace.fs.delete(itemPath.uri, { recursive: isDir })
+                );
+                
+                if (delOp.isErr()) {
+                    vscode.window.showErrorMessage(
+                        `Failed to delete ${isDir ? 'folder' : 'file'} "${item.name}"`
+                    );
+                }
+            }
+        }
+        
+        this.show();
+        this.keepAlive = false;
+        this.update();
+    }
 }
 
 export function activate(context: vscode.ExtensionContext) {
     setContext(false);
+    vscode.commands.executeCommand("setContext", "file-browser.inSearchMode", false);
+    vscode.commands.executeCommand("setContext", "file-browser.inVisualMode", false);
 
     context.subscriptions.push(
         vscode.commands.registerCommand("file-browser.open", () => {
@@ -484,6 +773,46 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.commands.registerCommand("file-browser.tabPrev", () =>
             active.ifSome((active) => active.tabCompletion(false))
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.moveDown", () =>
+            active.ifSome((active) => active.moveDown())
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.moveUp", () =>
+            active.ifSome((active) => active.moveUp())
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.toggleSearchMode", () =>
+            active.ifSome((active) => active.toggleSearchMode())
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.exitSearchMode", () =>
+            active.ifSome((active) => active.exitSearchMode())
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.toggleVisualMode", () =>
+            active.ifSome((active) => active.toggleVisualMode())
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.exitVisualMode", () =>
+            active.ifSome((active) => active.exitVisualMode())
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.renameInVisualMode", () =>
+            active.ifSome((active) => active.renameInVisualMode())
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.deleteInVisualMode", () =>
+            active.ifSome((active) => active.deleteInVisualMode())
         )
     );
 }

@@ -19,7 +19,7 @@
     ],
     "icon": "images/icon.png",
     "engines": {
-        "vscode": "^1.75"
+        "vscode": "^1.75.0"
     },
     "categories": [
         "Other"
@@ -28,6 +28,13 @@
     "extensionKind": [
         "workspace",
         "ui"
+    ],
+    "activationEvents": [
+        "onCommand:file-browser.open",
+        "onCommand:file-browser.rename",
+        "onCommand:file-browser.stepIn",
+        "onCommand:file-browser.stepOut",
+        "onCommand:file-browser.actions"
     ],
     "contributes": {
         "configuration": {
@@ -114,6 +121,61 @@
                 "key": "shift+tab",
                 "command": "file-browser.tabPrev",
                 "when": "inFileBrowser"
+            },
+            {
+                "key": "l",
+                "command": "file-browser.stepIn",
+                "when": "inFileBrowser && !file-browser.inSearchMode"
+            },
+            {
+                "key": "h",
+                "command": "file-browser.stepOut",
+                "when": "inFileBrowser && !file-browser.inSearchMode"
+            },
+            {
+                "key": "j",
+                "command": "file-browser.moveDown",
+                "when": "inFileBrowser && !file-browser.inSearchMode"
+            },
+            {
+                "key": "k",
+                "command": "file-browser.moveUp",
+                "when": "inFileBrowser && !file-browser.inSearchMode"
+            },
+            {
+                "key": "/",
+                "command": "file-browser.toggleSearchMode",
+                "when": "inFileBrowser"
+            },
+            {
+                "key": "i",
+                "command": "file-browser.toggleSearchMode",
+                "when": "inFileBrowser && !file-browser.inSearchMode"
+            },
+            {
+                "key": "v",
+                "command": "file-browser.toggleVisualMode",
+                "when": "inFileBrowser && !file-browser.inSearchMode"
+            },
+            {
+                "key": "escape",
+                "command": "file-browser.exitSearchMode",
+                "when": "inFileBrowser && file-browser.inSearchMode"
+            },
+            {
+                "key": "escape",
+                "command": "file-browser.exitVisualMode",
+                "when": "inFileBrowser && file-browser.inVisualMode"
+            },
+            {
+                "key": "r",
+                "command": "file-browser.renameInVisualMode",
+                "when": "inFileBrowser && file-browser.inVisualMode"
+            },
+            {
+                "key": "d",
+                "command": "file-browser.deleteInVisualMode",
+                "when": "inFileBrowser && file-browser.inVisualMode"
             }
         ]
     },
