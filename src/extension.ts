@@ -43,6 +43,8 @@ class FileBrowser {
     autoCompletion?: AutoCompletion;
     inSearchMode: boolean = false;
     inVisualMode: boolean = false;
+    inRenameMode: boolean = false;
+    inCreateMode: boolean = false;
     visualSelectionStart: number = -1;
     selectedItems: FileItem[] = [];
 
@@ -66,19 +68,43 @@ class FileBrowser {
         this.current = vscode.window.createQuickPick();
         this.current.buttons = [this.actionsButton, this.stepOutButton, this.stepInButton];
         this.current.placeholder = "Preparing the file list...";
-        this.current.onDidHide(() => {
-            if (!this.keepAlive) {
-                this.dispose();
-            }
-        });
+        
+        // Custom key press handler to intercept ESC key
+        // This is needed because VSCode's QuickPick automatically closes on ESC
+        // We want to handle ESC based on the current mode
+        this.current.onDidTriggerButton(this.onDidTriggerButton.bind(this));
         this.current.onDidAccept(this.onDidAccept.bind(this));
         this.current.onDidChangeValue(this.onDidChangeValue.bind(this));
-        this.current.onDidTriggerButton(this.onDidTriggerButton.bind(this));
+        
+        // Handle the QuickPick hide event
+        this.current.onDidHide(() => {
+            if (!this.keepAlive) {
+                // If the tool is being closed normally, dispose of it
+                this.dispose();
+            } else {
+                // If keepAlive is set, we're in the middle of an operation
+                // that temporarily hides the QuickPick
+            }
+        });
+        
+        // Add a special key-press handler for ESC
+        this.handleEscapeKey();
+        
         this.update().then(() => {
-            this.current.placeholder = "NORMAL mode (/ or i for INSERT, v for VISUAL, j/k to navigate)";
+            this.current.placeholder = "NORMAL mode (h,j,k,l to navigate | i for search | r to rename | d to delete | c for new file)";
             this.current.busy = false;
             this.setSearchMode(false);
             this.setVisualMode(false);
+            vscode.commands.executeCommand("setContext", "file-browser.inRenameMode", false);
+            vscode.commands.executeCommand("setContext", "file-browser.inCreateMode", false);
+        });
+    }
+
+    // Custom handler for ESC key to prevent QuickPick from closing automatically
+    private handleEscapeKey() {
+        // Update the QuickPick whenever it gains focus to ensure our escape handler context is preserved
+        this.current.onDidChangeActive(() => {
+            vscode.commands.executeCommand('setContext', 'inFileBrowserEscapeHandler', true);
         });
     }
 
@@ -95,6 +121,7 @@ class FileBrowser {
 
     show() {
         setContext(true);
+        vscode.commands.executeCommand('setContext', 'inFileBrowserEscapeHandler', true);
         this.current.show();
     }
 
@@ -157,15 +184,26 @@ class FileBrowser {
             return;
         }
 
-        if (!isAutoComplete) {
-            this.autoCompletion = undefined;
+        // In normal mode, prevent typing unless in rename, search, or create mode
+        if (!this.inSearchMode && !this.inRenameMode && !this.inCreateMode) {
+            // Reset the value to empty if the user tries to type
+            if (value !== "") {
+                this.current.value = "";
+            }
+            return;
         }
 
-        // We're in insert mode (vim terminology) when inSearchMode is true
-        if (!this.inSearchMode && value !== "") {
-            // Don't automatically enter search mode when typing
-            // This should only happen when explicitly toggled
+        // In visual mode, prevent typing unless in rename or create mode
+        if (this.inVisualMode && !this.inRenameMode && !this.inCreateMode) {
+            // Reset the value to empty if the user tries to type
+            if (value !== "") {
+                this.current.value = "";
+            }
             return;
+        }
+
+        if (!isAutoComplete) {
+            this.autoCompletion = undefined;
         }
 
         const existingItem = this.items.find((item) => item.name === value);
@@ -188,7 +226,7 @@ class FileBrowser {
                 },
                 () => {
                     // Filter items based on search input
-                    if (this.inSearchMode) {
+                    if (this.inSearchMode || this.inRenameMode || this.inCreateMode) {
                         const filtered = this.items.filter((item) =>
                             item.name.toLowerCase().includes(value.toLowerCase())
                         );
@@ -324,6 +362,50 @@ class FileBrowser {
 
     onDidAccept() {
         this.autoCompletion = undefined;
+        
+        // If in create mode, create the new file
+        if (this.inCreateMode && this.current.value !== "") {
+            const newFileName = this.current.value;
+            this.inCreateMode = false;
+            this.openFile(this.path.append(newFileName).uri.with({ scheme: "untitled" }));
+            return;
+        }
+        
+        // If in rename mode, handle the rename
+        if (this.inRenameMode && this.current.value !== "") {
+            const oldName = this.file.getOrElse(() => "");
+            const newName = this.current.value;
+            
+            if (oldName && newName && oldName !== newName) {
+                // Handle the rename
+                this.keepAlive = true;
+                this.hide();
+                
+                const oldUri = this.path.append(oldName).uri;
+                const newUri = this.path.append(newName).uri;
+                
+                vscode.workspace.fs.rename(oldUri, newUri).then(
+                    () => {
+                        // Reset state and update the file browser
+                        this.inRenameMode = false;
+                        this.inVisualMode = false;
+                        this.file = None;
+                        this.show();
+                        this.keepAlive = false;
+                        this.update();
+                    },
+                    (error) => {
+                        vscode.window.showErrorMessage(`Failed to rename "${oldName}" to "${newName}"`);
+                        this.inRenameMode = false;
+                        this.show();
+                        this.keepAlive = false;
+                    }
+                );
+            } else {
+                this.inRenameMode = false;
+            }
+            return;
+        }
         
         // If in search mode, select the item and exit search mode
         if (this.inSearchMode) {
@@ -475,6 +557,8 @@ class FileBrowser {
 
     setSearchMode(isSearchMode: boolean) {
         this.inSearchMode = isSearchMode;
+        this.inRenameMode = false;
+        this.inCreateMode = false;
         vscode.commands.executeCommand("setContext", "file-browser.inSearchMode", isSearchMode);
         
         if (isSearchMode) {
@@ -486,7 +570,7 @@ class FileBrowser {
             // Clear the search and reset the items
             this.current.value = "";
             this.current.items = this.items;
-            this.current.placeholder = "NORMAL mode (/ or i for INSERT, v for VISUAL, j/k to navigate)";
+            this.current.placeholder = "NORMAL mode (h,j,k,l to navigate | i for search | r to rename | d to delete | c for new file)";
         } else {
             this.current.placeholder = "INSERT mode (ESC to exit)";
         }
@@ -498,6 +582,8 @@ class FileBrowser {
 
     exitSearchMode() {
         this.setSearchMode(false);
+        // Prevent the tool from closing by stopping event propagation
+        this.current.show();
     }
 
     setVisualMode(isVisualMode: boolean) {
@@ -505,9 +591,14 @@ class FileBrowser {
         vscode.commands.executeCommand("setContext", "file-browser.inVisualMode", isVisualMode);
         
         if (isVisualMode) {
-            // Exit search mode if entering visual mode
+            // Exit search/rename/create mode if entering visual mode
             this.inSearchMode = false;
+            this.inRenameMode = false;
+            this.inCreateMode = false;
             vscode.commands.executeCommand("setContext", "file-browser.inSearchMode", false);
+            
+            // Clear any input
+            this.current.value = "";
             
             // Set the starting point for visual selection
             if (this.current.activeItems.length > 0) {
@@ -524,8 +615,8 @@ class FileBrowser {
             // Clear visual selection
             this.visualSelectionStart = -1;
             this.selectedItems = [];
-            if (!this.inSearchMode) {
-                this.current.placeholder = "NORMAL mode (/ or i for INSERT, v for VISUAL, j/k to navigate)";
+            if (!this.inSearchMode && !this.inRenameMode && !this.inCreateMode) {
+                this.current.placeholder = "NORMAL mode (h,j,k,l to navigate | i for search | r to rename | d to delete | c for new file)";
             }
         }
         
@@ -539,6 +630,8 @@ class FileBrowser {
 
     exitVisualMode() {
         this.setVisualMode(false);
+        // Prevent the tool from closing by stopping event propagation
+        this.current.show();
     }
 
     updateVisualSelection() {
@@ -645,19 +738,19 @@ class FileBrowser {
             return;
         }
 
-        // Exit visual mode
-        this.setVisualMode(false);
-
-        // Push the item name to the path
-        this.path.push(item.name);
-        // Then rename it
-        this.keepAlive = true;
-        this.hide();
-        await this.rename();
-        this.show();
-        this.keepAlive = false;
-        this.inActions = false;
-        this.update();
+        // Enter rename mode but keep visual mode active
+        this.inRenameMode = true;
+        vscode.commands.executeCommand("setContext", "file-browser.inRenameMode", true);
+        
+        // Store the item we're renaming for later
+        this.file = Some(item.name);
+        
+        // Set the input value to the current file name for editing
+        this.current.value = item.name;
+        this.current.placeholder = "Enter new name (Enter to confirm, ESC to cancel)";
+        
+        // Focus the input field and select the text for easy editing
+        this.current.show();
     }
 
     async deleteInVisualMode() {
@@ -710,12 +803,129 @@ class FileBrowser {
         this.keepAlive = false;
         this.update();
     }
+
+    async createNewFile() {
+        // Exit any other modes
+        this.inVisualMode = false;
+        this.inSearchMode = false;
+        this.inRenameMode = false;
+        
+        // Enter create mode
+        this.inCreateMode = true;
+        vscode.commands.executeCommand("setContext", "file-browser.inCreateMode", true);
+        
+        // Clear current selection and input
+        this.current.value = "";
+        this.current.placeholder = "Enter new file name (ESC to cancel)";
+        
+        // Focus the input field
+        this.current.show();
+    }
+
+    exitRenameMode() {
+        this.inRenameMode = false;
+        vscode.commands.executeCommand("setContext", "file-browser.inRenameMode", false);
+        this.current.value = "";
+        this.current.placeholder = "NORMAL mode (h,j,k,l to navigate | i for search | r to rename | d to delete | c for new file)";
+        // Prevent the tool from closing by stopping event propagation
+        this.current.show();
+    }
+
+    exitCreateMode() {
+        this.inCreateMode = false;
+        vscode.commands.executeCommand("setContext", "file-browser.inCreateMode", false);
+        this.current.value = "";
+        this.current.placeholder = "NORMAL mode (h,j,k,l to navigate | i for search | r to rename | d to delete | c for new file)";
+        // Prevent the tool from closing by stopping event propagation
+        this.current.show();
+    }
+
+    // Rename file in normal mode
+    async renameFile() {
+        if (this.inVisualMode || this.inSearchMode || this.inRenameMode || this.inCreateMode) {
+            return;
+        }
+        
+        // Make sure we have an active item
+        if (this.current.activeItems.length !== 1) {
+            return;
+        }
+        
+        const item = this.current.activeItems[0];
+        if (!item.fileType) {
+            // Can't rename special items like "New file"
+            return;
+        }
+        
+        // Enter rename mode
+        this.inRenameMode = true;
+        vscode.commands.executeCommand("setContext", "file-browser.inRenameMode", true);
+        
+        // Store the item we're renaming for later
+        this.file = Some(item.name);
+        
+        // Set the input value to the current file name for editing
+        this.current.value = item.name;
+        this.current.placeholder = "Enter new name (Enter to confirm, ESC to cancel)";
+        
+        // Focus the input field and select the text for easy editing
+        this.current.show();
+    }
+    
+    // Delete file in normal mode
+    async deleteFile() {
+        if (this.inVisualMode || this.inSearchMode || this.inRenameMode || this.inCreateMode) {
+            return;
+        }
+        
+        // Make sure we have an active item
+        if (this.current.activeItems.length !== 1) {
+            return;
+        }
+        
+        const item = this.current.activeItems[0];
+        if (!item.fileType) {
+            // Can't delete special items like "New file"
+            return;
+        }
+        
+        this.keepAlive = true;
+        this.hide();
+        
+        // Confirm delete
+        const isDir = (item.fileType & FileType.Directory) === FileType.Directory;
+        const itemType = isDir ? "folder" : "file";
+        
+        const goAhead = `$(trash) Delete the ${itemType} "${item.name}"`;
+        const result = await vscode.window.showQuickPick(["$(close) Cancel", goAhead], {});
+        
+        if (result === goAhead) {
+            const itemPath = this.path.append(item.name);
+            
+            const delOp = await Result.await(
+                vscode.workspace.fs.delete(itemPath.uri, { recursive: isDir })
+            );
+            
+            if (delOp.isErr()) {
+                vscode.window.showErrorMessage(
+                    `Failed to delete ${itemType} "${item.name}"`
+                );
+            }
+        }
+        
+        this.show();
+        this.keepAlive = false;
+        this.update();
+    }
 }
 
 export function activate(context: vscode.ExtensionContext) {
     setContext(false);
     vscode.commands.executeCommand("setContext", "file-browser.inSearchMode", false);
     vscode.commands.executeCommand("setContext", "file-browser.inVisualMode", false);
+    vscode.commands.executeCommand("setContext", "file-browser.inRenameMode", false);
+    vscode.commands.executeCommand("setContext", "file-browser.inCreateMode", false);
+    vscode.commands.executeCommand("setContext", "inFileBrowserEscapeHandler", false);
 
     context.subscriptions.push(
         vscode.commands.registerCommand("file-browser.open", () => {
@@ -814,6 +1024,55 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.registerCommand("file-browser.deleteInVisualMode", () =>
             active.ifSome((active) => active.deleteInVisualMode())
         )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.createNewFile", () =>
+            active.ifSome((active) => active.createNewFile())
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.exitRenameMode", () =>
+            active.ifSome((active) => active.exitRenameMode())
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.exitCreateMode", () =>
+            active.ifSome((active) => active.exitCreateMode())
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.renameFile", () =>
+            active.ifSome((active) => active.renameFile())
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.deleteFile", () =>
+            active.ifSome((active) => active.deleteFile())
+        )
+    );
+    context.subscriptions.push(
+        vscode.commands.registerCommand("file-browser.handleEscapeKey", () => {
+            return active.match(
+                (active) => {
+                    // Handle escape key based on current mode
+                    if (active.inSearchMode) {
+                        active.exitSearchMode();
+                        return true;
+                    } else if (active.inVisualMode) {
+                        active.exitVisualMode();
+                        return true;
+                    } else if (active.inRenameMode) {
+                        active.exitRenameMode();
+                        return true;
+                    } else if (active.inCreateMode) {
+                        active.exitCreateMode();
+                        return true;
+                    }
+                    return false;
+                },
+                () => false
+            );
+        })
     );
 }
 

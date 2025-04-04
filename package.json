@@ -125,22 +125,22 @@
             {
                 "key": "l",
                 "command": "file-browser.stepIn",
-                "when": "inFileBrowser && !file-browser.inSearchMode"
+                "when": "inFileBrowser && !file-browser.inSearchMode && !file-browser.inRenameMode && !file-browser.inCreateMode"
             },
             {
                 "key": "h",
                 "command": "file-browser.stepOut",
-                "when": "inFileBrowser && !file-browser.inSearchMode"
+                "when": "inFileBrowser && !file-browser.inSearchMode && !file-browser.inRenameMode && !file-browser.inCreateMode"
             },
             {
                 "key": "j",
                 "command": "file-browser.moveDown",
-                "when": "inFileBrowser && !file-browser.inSearchMode"
+                "when": "inFileBrowser && !file-browser.inSearchMode && !file-browser.inRenameMode && !file-browser.inCreateMode"
             },
             {
                 "key": "k",
                 "command": "file-browser.moveUp",
-                "when": "inFileBrowser && !file-browser.inSearchMode"
+                "when": "inFileBrowser && !file-browser.inSearchMode && !file-browser.inRenameMode && !file-browser.inCreateMode"
             },
             {
                 "key": "/",
@@ -159,6 +159,16 @@
             },
             {
                 "key": "escape",
+                "command": "file-browser.handleEscapeKey",
+                "when": "inFileBrowser && inFileBrowserEscapeHandler"
+            },
+            {
+                "key": "escape",
+                "command": "file-browser.exitSearchMode",
+                "when": "inFileBrowser && file-browser.inSearchMode"
+            },
+            {
+                "key": "ctrl+[",
                 "command": "file-browser.exitSearchMode",
                 "when": "inFileBrowser && file-browser.inSearchMode"
             },
@@ -168,14 +178,54 @@
                 "when": "inFileBrowser && file-browser.inVisualMode"
             },
             {
+                "key": "ctrl+[",
+                "command": "file-browser.exitVisualMode",
+                "when": "inFileBrowser && file-browser.inVisualMode"
+            },
+            {
+                "key": "escape",
+                "command": "file-browser.exitRenameMode",
+                "when": "inFileBrowser && file-browser.inRenameMode"
+            },
+            {
+                "key": "ctrl+[",
+                "command": "file-browser.exitRenameMode",
+                "when": "inFileBrowser && file-browser.inRenameMode"
+            },
+            {
+                "key": "escape",
+                "command": "file-browser.exitCreateMode",
+                "when": "inFileBrowser && file-browser.inCreateMode"
+            },
+            {
+                "key": "ctrl+[",
+                "command": "file-browser.exitCreateMode",
+                "when": "inFileBrowser && file-browser.inCreateMode"
+            },
+            {
                 "key": "r",
                 "command": "file-browser.renameInVisualMode",
                 "when": "inFileBrowser && file-browser.inVisualMode"
             },
             {
+                "key": "r",
+                "command": "file-browser.renameFile",
+                "when": "inFileBrowser && !file-browser.inSearchMode && !file-browser.inVisualMode && !file-browser.inRenameMode && !file-browser.inCreateMode"
+            },
+            {
                 "key": "d",
                 "command": "file-browser.deleteInVisualMode",
                 "when": "inFileBrowser && file-browser.inVisualMode"
+            },
+            {
+                "key": "d",
+                "command": "file-browser.deleteFile",
+                "when": "inFileBrowser && !file-browser.inSearchMode && !file-browser.inVisualMode && !file-browser.inRenameMode && !file-browser.inCreateMode"
+            },
+            {
+                "key": "c",
+                "command": "file-browser.createNewFile",
+                "when": "inFileBrowser && !file-browser.inSearchMode"
             }
         ]
     },
